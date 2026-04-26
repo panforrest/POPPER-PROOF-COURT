@@ -1,26 +1,45 @@
 @import "tailwindcss";
 
+/* ============================================================
+   POPPER-PROOF COURT — Brand Theme (Tailwind v4)
+   ============================================================ */
+
+@theme {
+  /* --- Brand colors: the three robes of the court --- */
+  --color-prosecutor: #DC2626;        /* red-600 — accusation */
+  --color-prosecutor-soft: #7F1D1D;   /* red-900 — backgrounds */
+  --color-defender: #2563EB;          /* blue-600 — defense */
+  --color-defender-soft: #1E3A8A;     /* blue-900 — backgrounds */
+  --color-judge: #D97706;             /* amber-600 — gold gavel */
+  --color-judge-soft: #78350F;        /* amber-900 — backgrounds */
+
+  /* --- Court chamber palette (dark cinematic) --- */
+  --color-court-bg: #0A0A0F;          /* near-black backdrop */
+  --color-court-surface: #14141A;     /* card surface */
+  --color-court-border: #27272A;      /* divider lines */
+  --color-court-fg: #F5F5F4;          /* primary text */
+  --color-court-muted: #A1A1AA;       /* secondary text */
+
+  /* --- Typefaces: Playfair Display for gravitas, Inter for clarity --- */
+  --font-display: var(--font-playfair);
+  --font-sans: var(--font-inter);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-court-bg);
+  color: var(--color-court-fg);
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Subtle radial vignette behind the hero — adds cinematic depth */
+.court-vignette {
+  background:
+    radial-gradient(ellipse at top, rgba(217, 119, 6, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse at bottom, rgba(37, 99, 235, 0.05) 0%, transparent 60%);
 }

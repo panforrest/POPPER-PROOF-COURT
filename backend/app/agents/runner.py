@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator
 
 from sse_starlette.event import ServerSentEvent
 
+from .. import storage
 from ..schemas import AgentRole, AgentTurn, TurnPhase, VerdictOutcome
 from ..trial_stream import build_mock_turns
 from . import clients as c
@@ -206,17 +207,24 @@ async def _produce_verdict(
 # --- Public: SSE generator -------------------------------------------------
 
 
-async def real_trial_event_stream(hypothesis: str) -> AsyncIterator[ServerSentEvent]:
+async def real_trial_event_stream(
+    hypothesis: str, *, case_id: str | None = None
+) -> AsyncIterator[ServerSentEvent]:
     """Yield SSE events identical in shape to the mock stream, but from real LLMs.
 
     Any per-turn failure falls back to the matching canned turn so the demo
     always completes through ``complete`` — it never dead-ends on a provider
     error.
+
+    When ``case_id`` is supplied, the completed transcript + verdict are
+    cached in storage so the planner can render an ExperimentPlan later
+    without re-streaming the trial.
     """
     fallback_turns = build_mock_turns(hypothesis)
     fallback_by_phase: dict[TurnPhase, AgentTurn] = {t.phase: t for t in fallback_turns}
 
     accumulated: list[AgentTurn] = []
+    final_verdict_payload: dict | None = None
 
     try:
         for phase, role in PHASE_ORDER:
@@ -230,6 +238,7 @@ async def real_trial_event_stream(hypothesis: str) -> AsyncIterator[ServerSentEv
                 if turn.confidence is not None:
                     yield _belief_event(turn.confidence)
                 accumulated.append(turn)
+                final_verdict_payload = verdict_payload
                 yield _verdict_event(verdict_payload)
                 continue
 
@@ -244,6 +253,15 @@ async def real_trial_event_stream(hypothesis: str) -> AsyncIterator[ServerSentEv
             yield _turn_event(turn)
             if role == AgentRole.JUDGE and turn.confidence is not None:
                 yield _belief_event(turn.confidence)
+
+        # Cache the completed trial so /api/cases/{id}/plan can use it.
+        if case_id is not None and final_verdict_payload is not None:
+            try:
+                storage.set_trial_result(
+                    case_id, turns=accumulated, verdict=final_verdict_payload
+                )
+            except Exception:  # noqa: BLE001 — never break the stream over a cache write
+                logger.exception("real trial: failed to cache trial result")
 
         yield ServerSentEvent(data="{}", event="complete")
     except Exception as e:  # noqa: BLE001 — last-ditch fallback

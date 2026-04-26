@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 
 from sse_starlette.event import ServerSentEvent
 
+from . import storage
 from .schemas import (
     AgentRole,
     AgentTurn,
@@ -164,9 +165,17 @@ def _verdict_payload() -> dict:
     }
 
 
-async def mock_trial_event_stream(hyp: str) -> AsyncIterator[ServerSentEvent]:
-    """Async generator of SSE events: thinking → turn (×9) → verdict → complete."""
+async def mock_trial_event_stream(
+    hyp: str, *, case_id: str | None = None
+) -> AsyncIterator[ServerSentEvent]:
+    """Async generator of SSE events: thinking → turn (×9) → verdict → complete.
+
+    When ``case_id`` is supplied, the completed transcript + verdict are
+    cached in storage so the planner can render an ExperimentPlan without
+    re-streaming.
+    """
     turns = build_mock_turns(hyp)
+    verdict_payload = _verdict_payload()
     try:
         for turn in turns:
             # Who is "writing" the next line?
@@ -190,9 +199,19 @@ async def mock_trial_event_stream(hyp: str) -> AsyncIterator[ServerSentEvent]:
             await asyncio.sleep(AFTER_TURN_PAUSE)
 
         yield ServerSentEvent(
-            data=json.dumps(_verdict_payload()),
+            data=json.dumps(verdict_payload),
             event="verdict",
         )
+
+        # Persist the trial so the planner can reuse the transcript.
+        if case_id is not None:
+            try:
+                storage.set_trial_result(
+                    case_id, turns=turns, verdict=verdict_payload
+                )
+            except Exception:  # noqa: BLE001 — never break the stream over a cache write
+                logger.exception("mock trial: failed to cache trial result")
+
         await asyncio.sleep(0.08)
         yield ServerSentEvent(data="{}", event="complete")
     except asyncio.CancelledError:  # pragma: no cover — client hung up

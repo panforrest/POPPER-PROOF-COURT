@@ -2,17 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Case } from "@/lib/api";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, ApiError, generatePlan } from "@/lib/api";
 import {
   AgentTurn,
+  ExperimentPlan,
   PHASE_BAR,
   PHASE_LABEL,
+  PlanState,
   StreamVerdict,
   TrialStreamState,
   TurnPhase,
   VerdictOutcome,
   phaseToChipKey,
 } from "@/lib/types";
+import ExperimentPlanCard from "./ExperimentPlanCard";
 import RobeColumn from "./RobeColumn";
 
 function outcomeLabel(o: VerdictOutcome): string {
@@ -38,9 +41,13 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
   const [error, setError] = useState<string | null>(null);
   const [streamVerdict, setStreamVerdict] = useState<StreamVerdict | null>(null);
   const [trialState, setTrialState] = useState<TrialStreamState>("idle");
+  const [plan, setPlan] = useState<ExperimentPlan | null>(null);
+  const [planState, setPlanState] = useState<PlanState>("idle");
+  const [planError, setPlanError] = useState<string | null>(null);
 
   const esRef = useRef<EventSource | null>(null);
   const streamDoneRef = useRef(false);
+  const planRunIdRef = useRef(0); // guards stale plan responses
 
   const prosecutorTurns = useMemo(
     () => turns.filter((t) => t.role === "prosecutor"),
@@ -69,6 +76,35 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
     };
   }, []);
 
+  const runPlanGeneration = useCallback(
+    async (opts?: { force?: boolean }) => {
+      const runId = ++planRunIdRef.current;
+      setPlanState("generating");
+      setPlanError(null);
+      try {
+        const next = await generatePlan(filed.id, opts);
+        if (planRunIdRef.current !== runId) return; // stale
+        setPlan(next);
+        setPlanState("ready");
+      } catch (e) {
+        if (planRunIdRef.current !== runId) return;
+        const msg =
+          e instanceof ApiError
+            ? `Plan generation failed (${e.status}): ${e.detail}`
+            : e instanceof Error
+              ? e.message
+              : "Plan generation failed.";
+        setPlanError(msg);
+        setPlanState("error");
+      }
+    },
+    [filed.id],
+  );
+
+  const handleRegeneratePlan = useCallback(() => {
+    runPlanGeneration({ force: true });
+  }, [runPlanGeneration]);
+
   const handleBeginTrial = useCallback(() => {
     // Tear down any prior run
     streamDoneRef.current = false;
@@ -82,6 +118,12 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
     setJudgeConfidence(null);
     setThinkingRole(null);
     setTrialState("streaming");
+
+    // Reset prior plan — a new trial means a new order from the bench.
+    planRunIdRef.current++;
+    setPlan(null);
+    setPlanState("idle");
+    setPlanError(null);
 
     const url = `${API_BASE}/api/cases/${encodeURIComponent(filed.id)}/trial/stream`;
     const es = new EventSource(url);
@@ -119,6 +161,8 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
       setThinkingRole(null);
       es.close();
       if (esRef.current === es) esRef.current = null;
+      // Auto-issue the runnable order. Backend caches, so this is cheap on reruns.
+      void runPlanGeneration();
     };
 
     const onTrialError = (e: MessageEvent) => {
@@ -151,7 +195,7 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
         setThinkingRole(null);
       }
     };
-  }, [filed.id]);
+  }, [filed.id, runPlanGeneration]);
 
   const ctaLabel =
     trialState === "streaming"
@@ -250,8 +294,8 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
 
         {trialState === "complete" && !error && (
           <p className="mt-4 text-sm text-defender bg-defender/10 border border-defender/30 rounded-md px-4 py-3">
-            The mock trial is complete. Step 9+ swaps canned lines for true
-            multi-agent arguments with real citations and ElevenLabs voice.
+            The bench has rendered its verdict. The Court Clerk is drafting
+            the runnable order below — scroll down to review.
           </p>
         )}
       </section>
@@ -306,15 +350,70 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
         ) : (
           <p className="text-sm text-court-muted leading-relaxed">
             The court has not yet rendered its verdict. Click{" "}
-            <span className="text-court-fg">Begin Trial</span> to open the mock
-            stream, or wait for a live docket. When the trial ends, the Judge
-            will decide <span className="text-judge">proceed</span>,{" "}
+            <span className="text-court-fg">Begin Trial</span> to convene the
+            bench. When the trial ends, the Judge will decide{" "}
+            <span className="text-judge">proceed</span>,{" "}
             <span className="text-judge">revise</span>, or{" "}
-            <span className="text-judge">dismiss</span>, and the clerk can publish
-            a procurement-ready plan.
+            <span className="text-judge">dismiss</span>, and the clerk will
+            publish a procurement-ready plan.
           </p>
         )}
       </section>
+
+      {/* ---------- ExperimentPlan / Order of the Court ---------- */}
+      {(planState !== "idle" || plan) && (
+        <>
+          {planState === "generating" && (
+            <section className="rounded-xl border border-judge/30 bg-court-surface/60 px-5 py-6 text-center">
+              <p className="text-[11px] uppercase tracking-[0.28em] text-judge mb-2">
+                Order of the Court
+              </p>
+              <p className="font-display text-lg text-court-fg">
+                The Clerk is drafting the runnable order…
+              </p>
+              <p className="mt-2 text-[12px] text-court-muted">
+                Compiling protocol, materials, budget, timeline, and risk
+                register from the bench's reasoning. Typically 15–60s.
+              </p>
+              <div className="mt-4 flex items-center justify-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-judge animate-pulse" />
+                <span
+                  className="w-2 h-2 rounded-full bg-judge animate-pulse"
+                  style={{ animationDelay: "0.15s" }}
+                />
+                <span
+                  className="w-2 h-2 rounded-full bg-judge animate-pulse"
+                  style={{ animationDelay: "0.3s" }}
+                />
+              </div>
+            </section>
+          )}
+
+          {planState === "error" && (
+            <section className="rounded-xl border border-prosecutor/40 bg-prosecutor/10 px-5 py-4">
+              <p className="text-[11px] uppercase tracking-[0.22em] text-prosecutor mb-1">
+                The Clerk could not draft the order
+              </p>
+              <p className="text-sm text-court-fg">{planError}</p>
+              <button
+                type="button"
+                onClick={() => runPlanGeneration({ force: true })}
+                className="mt-3 text-[10px] uppercase tracking-[0.22em] px-3 py-1 rounded-full border border-prosecutor/40 text-prosecutor hover:bg-prosecutor/20 transition-colors"
+              >
+                Try again
+              </button>
+            </section>
+          )}
+
+          {plan && planState === "ready" && (
+            <ExperimentPlanCard
+              plan={plan}
+              verdictOutcome={streamVerdict?.outcome ?? null}
+              onRegenerate={handleRegeneratePlan}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 }

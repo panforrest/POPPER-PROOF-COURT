@@ -71,6 +71,114 @@ export type StreamVerdict = {
 
 export type TrialStreamState = "idle" | "streaming" | "complete" | "error";
 
+// --- ExperimentPlan (mirrors backend schemas.py § 7-8) ---------------------
+
+export type RiskFactor = {
+  description: string;
+  severity: number; // 1..5
+  likelihood: number; // 1..5
+  mitigation: string;
+};
+
+export type ProtocolStep = {
+  n: number;
+  title: string;
+  description: string;
+  duration_minutes: number;
+  equipment: string[];
+  notes: string | null;
+  source_url: string | null;
+};
+
+export type MaterialLine = {
+  name: string;
+  catalog_number: string | null;
+  supplier: string | null;
+  quantity: number;
+  unit: string;
+  unit_price_usd: number | null;
+  total_usd: number | null;
+  url: string | null;
+};
+
+export type BudgetLine = {
+  category: string;
+  description: string;
+  amount_usd: number;
+};
+
+export type TimelinePhase = {
+  name: string;
+  week_start: number;
+  week_end: number;
+  depends_on: string[];
+};
+
+export type ValidationMetric = {
+  metric: string;
+  threshold: string;
+  method: string;
+  standard: string | null;
+};
+
+export type Personnel = {
+  role: string;
+  fte: number; // 0..1
+  weeks: number;
+  hourly_rate_usd: number | null;
+  total_cost_usd: number | null;
+  required_skills: string[];
+};
+
+export type EquipmentItem = {
+  name: string;
+  purpose: string;
+  estimated_cost_usd: number | null;
+  rental_available: boolean;
+  supplier: string | null;
+};
+
+export type CRORecommendation = {
+  name: string;
+  specialty: string;
+  estimated_cost_usd: number | null;
+  typical_turnaround_weeks: number | null;
+  url: string | null;
+};
+
+export type ExperimentPlan = {
+  case_id: string;
+  hypothesis: string;
+  summary: string;
+
+  protocol: ProtocolStep[];
+  materials: MaterialLine[];
+  budget: BudgetLine[];
+  total_budget_usd: number;
+  timeline: TimelinePhase[];
+  total_weeks: number;
+  validation: ValidationMetric[];
+
+  personnel: Personnel[];
+  equipment: EquipmentItem[];
+  regulatory_considerations: string[];
+  safety_classification: string | null;
+  risks_and_mitigations: RiskFactor[];
+
+  suggested_cros: CRORecommendation[];
+
+  success_criteria_summary: string;
+  failure_stop_criteria: string[];
+  deliverables: string[];
+  prereq_skills: string[];
+
+  citations: Citation[];
+
+  created_at: string; // ISO 8601
+};
+
+export type PlanState = "idle" | "generating" | "ready" | "error";
+
 // --- Trial-state derivations used by the UI --------------------------------
 
 /** Human-readable phase label shown in the phase bar. */

@@ -22,10 +22,14 @@ DEFAULT_JUDGE_MODEL = "gpt-4o"
 # Response caps — keep turns short so the demo pace is brisk.
 MAX_ARGUMENT_TOKENS = 450
 MAX_VERDICT_TOKENS = 700
+# Plan generation produces a much larger structured object.
+MAX_PLAN_TOKENS = 4000
 
 # Per-call timeout (seconds). Individual turn will fall back to the mock
-# text for that phase if exceeded.
+# text for that phase if exceeded. The planner gets a generous timeout
+# because it produces a much bigger payload.
 CALL_TIMEOUT_S = 25.0
+PLAN_TIMEOUT_S = 90.0
 
 
 def real_agents_available() -> bool:
@@ -141,6 +145,27 @@ async def call_judge_verdict(*, system: str, user: str) -> str:
     return (resp.choices[0].message.content or "").strip()
 
 
+async def call_planner(*, system: str, user: str) -> str:
+    """Plan generation — STRICT JSON, big token cap, longer timeout.
+
+    Returns the raw JSON string; the planner module parses + Pydantic-validates.
+    """
+    client = _get_openai()
+    model = os.getenv("OPENAI_PLANNER_MODEL", DEFAULT_JUDGE_MODEL)
+    resp = await client.chat.completions.create(
+        model=model,
+        max_tokens=MAX_PLAN_TOKENS,
+        temperature=0.4,
+        response_format={"type": "json_object"},
+        timeout=PLAN_TIMEOUT_S,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
 # ---------------------------------------------------------------------------
 # Debug helper
 # ---------------------------------------------------------------------------
@@ -152,4 +177,5 @@ def describe_models() -> dict[str, Optional[str]]:
         "prosecutor": os.getenv("ANTHROPIC_PROSECUTOR_MODEL", DEFAULT_PROSECUTOR_MODEL),
         "defender": os.getenv("OPENAI_DEFENDER_MODEL", DEFAULT_DEFENDER_MODEL),
         "judge": os.getenv("OPENAI_JUDGE_MODEL", DEFAULT_JUDGE_MODEL),
+        "planner": os.getenv("OPENAI_PLANNER_MODEL", DEFAULT_JUDGE_MODEL),
     }

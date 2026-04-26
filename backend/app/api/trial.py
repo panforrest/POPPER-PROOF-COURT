@@ -45,9 +45,9 @@ async def stream_trial(case_id: str) -> EventSourceResponse:
         )
 
     stream = (
-        real_trial_event_stream(case.hypothesis)
+        real_trial_event_stream(case.hypothesis, case_id=case.id)
         if _use_real_agents()
-        else mock_trial_event_stream(case.hypothesis)
+        else mock_trial_event_stream(case.hypothesis, case_id=case.id)
     )
     return EventSourceResponse(stream)
 

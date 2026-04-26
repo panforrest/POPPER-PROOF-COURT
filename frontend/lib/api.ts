@@ -76,3 +76,23 @@ export const getCase = (caseId: string): Promise<Case> =>
 
 export const listCases = (): Promise<Case[]> =>
   request<Case[]>("/api/cases");
+
+// --- ExperimentPlan endpoints ----------------------------------------------
+
+import type { ExperimentPlan } from "./types";
+
+/** Generate (or return cached) ExperimentPlan for a case whose trial completed. */
+export const generatePlan = (
+  caseId: string,
+  opts?: { force?: boolean },
+): Promise<ExperimentPlan> => {
+  const qs = opts?.force ? "?force=true" : "";
+  return request<ExperimentPlan>(
+    `/api/cases/${encodeURIComponent(caseId)}/plan${qs}`,
+    { method: "POST" },
+  );
+};
+
+/** Fetch the cached plan for a case (404 if not generated yet). */
+export const fetchPlan = (caseId: string): Promise<ExperimentPlan> =>
+  request<ExperimentPlan>(`/api/cases/${encodeURIComponent(caseId)}/plan`);

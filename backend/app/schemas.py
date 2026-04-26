@@ -64,6 +64,15 @@ class VerdictOutcome(str, Enum):
     DISMISS = "dismiss"
 
 
+class ChatRole(str, Enum):
+    """Roles in a Reporter chat exchange (kept tiny on purpose — we
+    deliberately do *not* expose 'system' to the wire so the client
+    can never override the Reporter's persona)."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
 # ---------------------------------------------------------------------------
 # 2. Primitive value objects
 # ---------------------------------------------------------------------------
@@ -114,6 +123,26 @@ class StareDecisisResult(BaseModel):
     signal: NoveltySignal
     rationale: str
     citations: list[Citation] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# 4b. Court Reporter chat (interactive sidekick)
+# ---------------------------------------------------------------------------
+
+
+class ChatMessage(BaseModel):
+    role: ChatRole
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
+class ReporterChatRequest(BaseModel):
+    """Wire format for ``POST /api/cases/{id}/reporter/chat``.
+
+    The full chat history is sent on every turn — the server is stateless
+    so we can hot-reload backend without dropping the conversation.
+    """
+
+    messages: list[ChatMessage] = Field(..., min_length=1, max_length=40)
 
 
 # ---------------------------------------------------------------------------

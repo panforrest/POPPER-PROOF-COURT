@@ -22,6 +22,7 @@ import {
   VerdictOutcome,
   phaseToChipKey,
 } from "@/lib/types";
+import CourtReporterDrawer from "./CourtReporterDrawer";
 import ExperimentPlanCard from "./ExperimentPlanCard";
 import PretrialDiscoveryPanel from "./PretrialDiscoveryPanel";
 import RobeColumn from "./RobeColumn";
@@ -56,6 +57,8 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
   const [discovery, setDiscovery] = useState<StareDecisisResult | null>(null);
   const [discoveryState, setDiscoveryState] = useState<DiscoveryState>("idle");
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+
+  const [reporterOpen, setReporterOpen] = useState(false);
 
   const esRef = useRef<EventSource | null>(null);
   const streamDoneRef = useRef(false);
@@ -509,6 +512,33 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
           )}
         </>
       )}
+
+      {/* ---------- Court Reporter (floating launcher + slide-over drawer) ---------- */}
+      <button
+        type="button"
+        onClick={() => setReporterOpen(true)}
+        aria-label="Open Court Reporter chat"
+        className="fixed bottom-5 right-5 z-30 group flex items-center gap-2 px-4 py-3 rounded-full bg-judge text-court-bg font-semibold shadow-2xl shadow-judge/30 hover:bg-judge/90 transition-all hover:scale-105"
+      >
+        <span className="text-lg leading-none" aria-hidden>
+          ⚖
+        </span>
+        <span className="hidden sm:inline text-[10px] uppercase tracking-[0.22em]">
+          Ask the Court Reporter
+        </span>
+        <span className="sm:hidden text-[10px] uppercase tracking-[0.22em]">
+          Reporter
+        </span>
+      </button>
+
+      <CourtReporterDrawer
+        open={reporterOpen}
+        onClose={() => setReporterOpen(false)}
+        caseId={filed.id}
+        discoveryPool={discovery?.citations}
+        trialStarted={turns.length > 0}
+        verdictReady={streamVerdict !== null}
+      />
     </div>
   );
 }

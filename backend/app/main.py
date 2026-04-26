@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.cases import router as cases_router
 from .api.discovery import router as discovery_router
 from .api.plan import router as plan_router
+from .api.reporter import router as reporter_router
 from .api.trial import router as trial_router
 
 # Load .env from the repo root (one level above /backend) so a single
@@ -74,4 +75,5 @@ async def health() -> dict[str, str]:
 app.include_router(trial_router)
 app.include_router(plan_router)
 app.include_router(discovery_router)
+app.include_router(reporter_router)
 app.include_router(cases_router)

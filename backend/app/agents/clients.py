@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import AsyncIterator
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -24,12 +25,15 @@ MAX_ARGUMENT_TOKENS = 450
 MAX_VERDICT_TOKENS = 700
 # Plan generation produces a much larger structured object.
 MAX_PLAN_TOKENS = 4000
+# Reporter answers are conversational — keep them tight and on-screen.
+MAX_REPORTER_TOKENS = 600
 
 # Per-call timeout (seconds). Individual turn will fall back to the mock
 # text for that phase if exceeded. The planner gets a generous timeout
 # because it produces a much bigger payload.
 CALL_TIMEOUT_S = 25.0
 PLAN_TIMEOUT_S = 90.0
+REPORTER_TIMEOUT_S = 60.0
 
 
 def real_agents_available() -> bool:
@@ -145,6 +149,44 @@ async def call_judge_verdict(*, system: str, user: str) -> str:
     return (resp.choices[0].message.content or "").strip()
 
 
+async def stream_reporter(
+    *,
+    system: str,
+    history: list[dict[str, str]],
+) -> AsyncIterator[str]:
+    """Stream the Court Reporter's reply token-by-token.
+
+    ``history`` is the chat history in OpenAI shape:
+    ``[{"role": "user"|"assistant", "content": str}, ...]`` (most recent last).
+    The system prompt is prepended; the function yields delta strings as
+    they arrive. Empty deltas are skipped. On error, yields an inline
+    apology so the UI still shows something.
+    """
+    client = _get_openai()
+    model = os.getenv("OPENAI_REPORTER_MODEL", DEFAULT_JUDGE_MODEL)
+    try:
+        stream = await client.chat.completions.create(
+            model=model,
+            max_tokens=MAX_REPORTER_TOKENS,
+            temperature=0.4,
+            timeout=REPORTER_TIMEOUT_S,
+            stream=True,
+            messages=[{"role": "system", "content": system}, *history],
+        )
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+    except Exception as e:  # noqa: BLE001 — convert to inline message
+        logger.exception("reporter stream failed")
+        yield (
+            "\n\n_(The Court Reporter has lost the line. "
+            f"Reason: {type(e).__name__}.)_"
+        )
+
+
 async def call_planner(*, system: str, user: str) -> str:
     """Plan generation — STRICT JSON, big token cap, longer timeout.
 
@@ -178,4 +220,5 @@ def describe_models() -> dict[str, Optional[str]]:
         "defender": os.getenv("OPENAI_DEFENDER_MODEL", DEFAULT_DEFENDER_MODEL),
         "judge": os.getenv("OPENAI_JUDGE_MODEL", DEFAULT_JUDGE_MODEL),
         "planner": os.getenv("OPENAI_PLANNER_MODEL", DEFAULT_JUDGE_MODEL),
+        "reporter": os.getenv("OPENAI_REPORTER_MODEL", DEFAULT_JUDGE_MODEL),
     }

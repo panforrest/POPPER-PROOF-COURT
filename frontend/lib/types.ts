@@ -189,6 +189,22 @@ export type StareDecisisResult = {
 
 export type DiscoveryState = "idle" | "running" | "ready" | "error";
 
+// --- Court Reporter chat (mirrors backend ChatMessage) --------------------
+
+export const ChatRole = {
+  USER: "user",
+  ASSISTANT: "assistant",
+} as const;
+export type ChatRole = (typeof ChatRole)[keyof typeof ChatRole];
+
+export type ChatMessage = {
+  role: ChatRole;
+  content: string;
+};
+
+/** Lifecycle of the Reporter chat panel. */
+export type ReporterState = "idle" | "streaming" | "ready" | "error";
+
 /** Human label + tone for the novelty badge. */
 export const NOVELTY_LABEL: Record<NoveltySignal, string> = {
   [NoveltySignal.NOT_FOUND]: "Novel",

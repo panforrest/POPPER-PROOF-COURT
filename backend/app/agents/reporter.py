@@ -158,6 +158,32 @@ def _format_plan(plan: Optional[ExperimentPlan]) -> str:
     return blob
 
 
+def _format_memoranda(memos: list) -> str:
+    """Render filed bench memoranda + the verdicts they produced."""
+    if not memos:
+        return "(No bench memoranda on file — the original verdict stands.)"
+    lines: list[str] = []
+    for i, m in enumerate(memos, start=1):
+        instruction = (m.instruction or "").strip()
+        rv = m.revised_verdict or {}
+        prv = m.prior_verdict or {}
+        rv_outcome = str(rv.get("outcome", "?")).upper()
+        rv_conf = rv.get("confidence", "?")
+        rv_rationale = (str(rv.get("rationale") or "")).strip()
+        prv_outcome = str(prv.get("outcome", "?")).upper()
+        prv_conf = prv.get("confidence", "?")
+        delta = (
+            "no change" if rv_outcome == prv_outcome else f"{prv_outcome} → {rv_outcome}"
+        )
+        lines.append(
+            f"[Memo {i}] \"{instruction}\"\n"
+            f"   Before: {prv_outcome} ({prv_conf})  "
+            f"After: {rv_outcome} ({rv_conf})   [{delta}]\n"
+            f"   Rationale: {rv_rationale}"
+        )
+    return "\n\n".join(lines)
+
+
 def build_reporter_context(case: Case) -> str:
     """Render the full dossier the Reporter has access to.
 
@@ -167,12 +193,14 @@ def build_reporter_context(case: Case) -> str:
     discovery = storage.get_discovery(case.id)
     trial = storage.get_trial_result(case.id)
     plan = storage.get_plan(case.id)
+    memos = storage.get_memoranda(case.id)
 
     citations_block = _format_citations(
         discovery.citations if discovery else []
     )
     turns_block = _format_turns(trial.get("turns", []) if trial else [])
     verdict_block = _format_verdict(trial.get("verdict") if trial else None)
+    memos_block = _format_memoranda(memos)
     plan_block = _format_plan(plan)
 
     novelty = (
@@ -192,7 +220,8 @@ def build_reporter_context(case: Case) -> str:
         f"PRETRIAL DISCOVERY VERDICT (novelty signal):\n{novelty}\n\n"
         f"RECORD ON FILE (cite as [N]):\n{citations_block}\n\n"
         f"TRIAL TRANSCRIPT (9 turns, in order):\n{turns_block}\n\n"
-        f"FINAL VERDICT:\n{verdict_block}\n\n"
+        f"CURRENT VERDICT (latest, after any memoranda):\n{verdict_block}\n\n"
+        f"BENCH MEMORANDA FILED (oldest first):\n{memos_block}\n\n"
         f"ORDER OF THE COURT (experiment plan):\n{plan_block}\n"
         "================================================================\n"
     )

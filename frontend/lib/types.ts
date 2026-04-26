@@ -205,6 +205,35 @@ export type ChatMessage = {
 /** Lifecycle of the Reporter chat panel. */
 export type ReporterState = "idle" | "streaming" | "ready" | "error";
 
+// --- Bench Memorandum (mirrors backend BenchMemorandum) -------------------
+
+/** Snapshot of the verdict *before* a memorandum was applied.
+ * Always 3 keys — narrative is stripped when persisted. */
+export type PriorVerdict = {
+  outcome: VerdictOutcome;
+  confidence: number;
+  rationale: string;
+};
+
+/** The Judge's revised ruling (4 keys — includes spoken narrative). */
+export type RevisedVerdict = {
+  outcome: VerdictOutcome;
+  confidence: number;
+  rationale: string;
+  narrative: string;
+};
+
+/** A single filed memorandum + the verdict it produced. */
+export type BenchMemorandum = {
+  instruction: string;
+  prior_verdict: PriorVerdict;
+  revised_verdict: RevisedVerdict;
+  applied_at: string; // ISO 8601
+};
+
+/** Lifecycle of the Bench Memorandum card. */
+export type MemorandumState = "idle" | "thinking" | "applied" | "error";
+
 /** Human label + tone for the novelty badge. */
 export const NOVELTY_LABEL: Record<NoveltySignal, string> = {
   [NoveltySignal.NOT_FOUND]: "Novel",

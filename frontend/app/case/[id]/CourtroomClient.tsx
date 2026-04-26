@@ -5,16 +5,19 @@ import type { Case } from "@/lib/api";
 import {
   API_BASE,
   ApiError,
+  fetchMemoranda,
   generatePlan,
   runDiscovery,
 } from "@/lib/api";
 import {
   AgentTurn,
+  type BenchMemorandum,
   DiscoveryState,
   ExperimentPlan,
   PHASE_BAR,
   PHASE_LABEL,
   PlanState,
+  type RevisedVerdict,
   StareDecisisResult,
   StreamVerdict,
   TrialStreamState,
@@ -22,6 +25,7 @@ import {
   VerdictOutcome,
   phaseToChipKey,
 } from "@/lib/types";
+import BenchMemorandumCard from "./BenchMemorandumCard";
 import CourtReporterDrawer from "./CourtReporterDrawer";
 import ExperimentPlanCard from "./ExperimentPlanCard";
 import PretrialDiscoveryPanel from "./PretrialDiscoveryPanel";
@@ -58,12 +62,15 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
   const [discoveryState, setDiscoveryState] = useState<DiscoveryState>("idle");
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
 
+  const [memoranda, setMemoranda] = useState<BenchMemorandum[]>([]);
+
   const [reporterOpen, setReporterOpen] = useState(false);
 
   const esRef = useRef<EventSource | null>(null);
   const streamDoneRef = useRef(false);
   const planRunIdRef = useRef(0); // guards stale plan responses
   const discoveryRunIdRef = useRef(0); // guards stale discovery responses
+  const memoHydratedRef = useRef(false); // hydrate-once guard for the memos list
 
   const prosecutorTurns = useMemo(
     () => turns.filter((t) => t.role === "prosecutor"),
@@ -123,6 +130,18 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
     void fireDiscovery();
   }, [fireDiscovery]);
 
+  // Hydrate any memoranda already on file for this case. Best-effort —
+  // a fetch failure is silently swallowed (the chain just renders empty).
+  useEffect(() => {
+    if (memoHydratedRef.current) return;
+    memoHydratedRef.current = true;
+    void fetchMemoranda(filed.id)
+      .then((list) => setMemoranda(list))
+      .catch(() => {
+        /* ignore — empty chain is the safe default */
+      });
+  }, [filed.id]);
+
   const runPlanGeneration = useCallback(
     async (opts?: { force?: boolean }) => {
       const runId = ++planRunIdRef.current;
@@ -152,6 +171,28 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
     runPlanGeneration({ force: true });
   }, [runPlanGeneration]);
 
+  const handleVerdictRevised = useCallback((revised: RevisedVerdict) => {
+    // Mirror StreamVerdict shape (3 keys) — the verdict strip does not
+    // know about the courtroom narrative; that's surfaced inside the
+    // memo entry below. The shape match keeps existing UI code untouched.
+    setStreamVerdict({
+      outcome: revised.outcome,
+      rationale: revised.rationale,
+      confidence: revised.confidence,
+    });
+  }, []);
+
+  const handleMemorandumFiled = useCallback(
+    (memo: BenchMemorandum) => {
+      setMemoranda((prev) => [...prev, memo]);
+      // The standing ruling has changed — the plan must be redrawn under
+      // the new constraints. force=true bypasses the backend cache so we
+      // get a fresh order from the bench, not the pre-memorandum draft.
+      void runPlanGeneration({ force: true });
+    },
+    [runPlanGeneration],
+  );
+
   const handleBeginTrial = useCallback(() => {
     // Tear down any prior run
     streamDoneRef.current = false;
@@ -171,6 +212,11 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
     setPlan(null);
     setPlanState("idle");
     setPlanError(null);
+
+    // A fresh trial supersedes any prior memoranda chain — the backend
+    // already drops them via storage.set_trial_result on a new run, but
+    // the frontend must wipe its mirror so the chain log doesn't lie.
+    setMemoranda([]);
 
     const url = `${API_BASE}/api/cases/${encodeURIComponent(filed.id)}/trial/stream`;
     const es = new EventSource(url);
@@ -424,6 +470,14 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
         <div className="flex items-center gap-3 mb-2">
           <span className="text-judge text-xl leading-none">⚖</span>
           <h2 className="font-display text-xl text-court-fg">Verdict</h2>
+          {memoranda.length > 0 && (
+            <span
+              className="text-[10px] uppercase tracking-[0.22em] px-2.5 py-1 rounded-full border border-judge/50 text-judge bg-judge/10"
+              title={`The ruling has been revised ${memoranda.length} time${memoranda.length === 1 ? "" : "s"} via Bench Memorandum.`}
+            >
+              Revised ×{memoranda.length}
+            </span>
+          )}
           <span
             className={`ml-auto text-[10px] uppercase tracking-[0.22em] px-3 py-1 rounded-full border ${
               streamVerdict
@@ -457,6 +511,17 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
           </p>
         )}
       </section>
+
+      {/* ---------- Bench Memorandum (post-verdict reconsideration) ---------- */}
+      {(streamVerdict || memoranda.length > 0) && (
+        <BenchMemorandumCard
+          caseId={filed.id}
+          available={streamVerdict !== null}
+          memoranda={memoranda}
+          onVerdictRevised={handleVerdictRevised}
+          onMemorandumFiled={handleMemorandumFiled}
+        />
+      )}
 
       {/* ---------- ExperimentPlan / Order of the Court ---------- */}
       {(planState !== "idle" || plan) && (

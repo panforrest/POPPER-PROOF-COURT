@@ -146,6 +146,37 @@ class ReporterChatRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# 4c. Bench Memorandum (post-verdict reconsideration)
+# ---------------------------------------------------------------------------
+
+
+class MemorandumRequest(BaseModel):
+    """Wire format for ``POST /api/cases/{id}/memorandum``.
+
+    A short, concrete instruction the parties move the court to consider —
+    e.g. "Budget cap is now $3,000", "Citation [3] has been retracted",
+    "Assume access to a flow cytometer". The Judge re-deliberates with the
+    full transcript + this instruction, and issues a revised verdict.
+    """
+
+    instruction: str = Field(..., min_length=4, max_length=500)
+
+
+class BenchMemorandum(BaseModel):
+    """One filed memorandum + the revised verdict it produced.
+
+    Stored in order of filing, so the demo can show a chain of
+    reconsiderations. ``prior_verdict`` is a snapshot of the verdict as it
+    stood *before* this memorandum (so the UI can show the delta).
+    """
+
+    instruction: str
+    prior_verdict: dict  # {outcome, confidence, rationale}
+    revised_verdict: dict  # {outcome, confidence, rationale, narrative}
+    applied_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
 # 5. Trial — agent turns
 # ---------------------------------------------------------------------------
 

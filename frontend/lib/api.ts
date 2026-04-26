@@ -256,3 +256,183 @@ export async function streamReporter(
     }
   }
 }
+
+// --- Bench Memorandum (POST + SSE) ----------------------------------------
+
+import type { BenchMemorandum, RevisedVerdict } from "./types";
+
+/** Callbacks fired during a single Bench Memorandum re-deliberation. */
+export type MemorandumStreamHandlers = {
+  /** Fired immediately when the Judge starts re-deliberating. */
+  onThinking?: () => void;
+  /** Fired with the revised verdict payload (outcome + narrative + rationale). */
+  onVerdict: (revised: RevisedVerdict) => void;
+  /** Fired with the persisted BenchMemorandum record (after the verdict). */
+  onMemorandum?: (memo: BenchMemorandum) => void;
+  /** Fired once the server emits the terminal `complete` event. */
+  onDone?: () => void;
+  /** Fired on any transport / server error (4xx, 5xx, abort, parse). */
+  onError?: (err: Error) => void;
+  /** AbortSignal to cancel the request mid-flight. */
+  signal?: AbortSignal;
+};
+
+/**
+ * File a Bench Memorandum and stream the Judge's revised verdict back.
+ *
+ * Why a hand-rolled SSE parser? Same reason as `streamReporter`: EventSource
+ * only supports GET, but we POST the instruction body. So we POST + read
+ * `text/event-stream` via fetch + ReadableStream and parse the bytes
+ * ourselves. CRLF→LF normalisation is the same fix as the Reporter's.
+ *
+ * Event contract (from backend api/bench.py):
+ *   thinking            → { role: "judge" }
+ *   verdict             → RevisedVerdict
+ *   memorandum_applied  → BenchMemorandum
+ *   complete            → {}
+ *   error               → { message: string }
+ */
+export async function submitBenchMemorandum(
+  caseId: string,
+  instruction: string,
+  handlers: MemorandumStreamHandlers,
+): Promise<void> {
+  const { onThinking, onVerdict, onMemorandum, onDone, onError, signal } =
+    handlers;
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `${API_BASE}/api/cases/${encodeURIComponent(caseId)}/memorandum`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({ instruction }),
+        signal,
+        cache: "no-store",
+      },
+    );
+  } catch (e) {
+    onError?.(e instanceof Error ? e : new Error(String(e)));
+    return;
+  }
+
+  if (!res.ok || !res.body) {
+    const body = await res.text().catch(() => "");
+    let detail = body.slice(0, 300);
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed?.detail) detail = String(parsed.detail);
+    } catch {
+      /* keep raw body */
+    }
+    onError?.(new ApiError(res.status, detail));
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let finished = false;
+
+  try {
+    while (!finished) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      // sse-starlette emits CRLF; normalise to LF so frame splitting works.
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
+
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+
+        let eventName = "message";
+        const dataLines: string[] = [];
+        for (const line of frame.split("\n")) {
+          if (line.startsWith(":")) continue; // SSE comment / keepalive
+          if (line.startsWith("event:")) {
+            eventName = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trimStart());
+          }
+        }
+        if (dataLines.length === 0) continue;
+        const data = dataLines.join("\n");
+
+        switch (eventName) {
+          case "thinking": {
+            onThinking?.();
+            break;
+          }
+          case "verdict": {
+            try {
+              const parsed = JSON.parse(data) as RevisedVerdict;
+              onVerdict(parsed);
+            } catch {
+              onError?.(new Error("Malformed verdict frame"));
+              finished = true;
+            }
+            break;
+          }
+          case "memorandum_applied": {
+            try {
+              const parsed = JSON.parse(data) as BenchMemorandum;
+              onMemorandum?.(parsed);
+            } catch {
+              /* non-fatal — verdict already delivered */
+            }
+            break;
+          }
+          case "complete": {
+            finished = true;
+            onDone?.();
+            break;
+          }
+          case "error": {
+            let msg = "Memorandum re-deliberation failed";
+            try {
+              const parsed = JSON.parse(data) as { message?: string };
+              if (parsed.message) msg = parsed.message;
+            } catch {
+              /* keep generic */
+            }
+            onError?.(new Error(msg));
+            finished = true;
+            break;
+          }
+          default:
+            // Unknown event — ignore so future server-side additions
+            // don't break older clients.
+            break;
+        }
+      }
+    }
+    if (!finished) onDone?.();
+  } catch (e) {
+    if (signal?.aborted) {
+      onDone?.();
+      return;
+    }
+    onError?.(e instanceof Error ? e : new Error(String(e)));
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* noop */
+    }
+  }
+}
+
+/** Fetch the chain of memoranda already filed against a case (oldest first). */
+export const fetchMemoranda = async (
+  caseId: string,
+): Promise<BenchMemorandum[]> => {
+  const res = await request<{ memoranda: BenchMemorandum[] }>(
+    `/api/cases/${encodeURIComponent(caseId)}/memoranda`,
+  );
+  return res.memoranda;
+};

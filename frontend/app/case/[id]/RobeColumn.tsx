@@ -1,6 +1,6 @@
 "use client";
 
-import type { AgentTurn } from "@/lib/types";
+import type { AgentTurn, Citation } from "@/lib/types";
 
 export type Robe = "prosecutor" | "defender" | "judge";
 
@@ -43,6 +43,7 @@ export default function RobeColumn({
   thinking,
   confidence,
   elevated,
+  discoveryPool,
 }: {
   robe: Robe;
   turns: AgentTurn[];
@@ -52,6 +53,13 @@ export default function RobeColumn({
   confidence?: number | null;
   /** Raises the column slightly (used for the Judge's bench). */
   elevated?: boolean;
+  /**
+   * The pretrial discovery citation list, in original order. Used to render
+   * citation chips with the same `[N]` index the agent referenced in the
+   * argument text — so "the record at [2]" in the prose lines up with the
+   * chip labelled `[2]` underneath.
+   */
+  discoveryPool?: Citation[];
 }) {
   const style = ROBE_STYLE[robe];
 
@@ -87,7 +95,12 @@ export default function RobeColumn({
           <EmptyState robe={robe} />
         )}
         {turns.map((t, i) => (
-          <TurnCard key={i} turn={t} robe={robe} />
+          <TurnCard
+            key={i}
+            turn={t}
+            robe={robe}
+            discoveryPool={discoveryPool}
+          />
         ))}
         {thinking && <ThinkingIndicator robe={robe} />}
       </div>
@@ -137,7 +150,15 @@ function Dot({ delay }: { delay: number }) {
   );
 }
 
-function TurnCard({ turn, robe }: { turn: AgentTurn; robe: Robe }) {
+function TurnCard({
+  turn,
+  robe,
+  discoveryPool,
+}: {
+  turn: AgentTurn;
+  robe: Robe;
+  discoveryPool?: Citation[];
+}) {
   const style = ROBE_STYLE[robe];
   return (
     <article
@@ -159,19 +180,86 @@ function TurnCard({ turn, robe }: { turn: AgentTurn; robe: Robe }) {
         {turn.text}
       </p>
       {turn.citations.length > 0 && (
-        <footer className="mt-2 flex flex-wrap gap-1">
+        <footer className="mt-2 flex flex-wrap gap-1.5">
           {turn.citations.map((c, i) => (
-            <span
+            <CitationChip
               key={i}
-              className="text-[10px] px-2 py-0.5 rounded-full border border-court-border text-court-muted"
-              title={c.title}
-            >
-              [{i + 1}] {c.source}
-            </span>
+              c={c}
+              fallbackIndex={i + 1}
+              pool={discoveryPool}
+            />
           ))}
         </footer>
       )}
     </article>
+  );
+}
+
+const SOURCE_SHORT: Record<string, string> = {
+  tavily: "tavily",
+  semantic_scholar: "S2",
+  arxiv: "arXiv",
+  pubmed: "PubMed",
+};
+
+function indexInPool(c: Citation, pool?: Citation[]): number | null {
+  if (!pool || pool.length === 0) return null;
+  const idx = pool.findIndex((p) => {
+    if (c.url && p.url) return p.url === c.url;
+    return p.title === c.title;
+  });
+  return idx >= 0 ? idx + 1 : null;
+}
+
+function firstAuthor(c: Citation): string | null {
+  if (!c.authors || c.authors.length === 0) return null;
+  const a = c.authors[0];
+  const last = a.includes(",") ? a.split(",")[0]!.trim() : a.split(" ").pop()!;
+  return last || null;
+}
+
+function CitationChip({
+  c,
+  fallbackIndex,
+  pool,
+}: {
+  c: Citation;
+  fallbackIndex: number;
+  pool?: Citation[];
+}) {
+  const n = indexInPool(c, pool) ?? fallbackIndex;
+  const src = SOURCE_SHORT[c.source] ?? c.source;
+  const author = firstAuthor(c);
+  const year = c.year ? ` ${c.year}` : "";
+  const tail = author ? `${author}${year}` : src;
+  const tip = c.year ? `${c.title} (${c.year})` : c.title;
+
+  const inner = (
+    <>
+      <span className="font-medium">[{n}]</span> {tail}
+    </>
+  );
+
+  const base =
+    "inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border border-court-border text-court-muted";
+
+  if (c.url) {
+    return (
+      <a
+        href={c.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={`${base} hover:text-court-fg hover:border-court-muted transition-colors`}
+        title={tip}
+      >
+        {inner}
+      </a>
+    );
+  }
+  return (
+    <span className={base} title={tip}>
+      {inner}
+    </span>
   );
 }
 

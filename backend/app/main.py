@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.cases import router as cases_router
+from .api.discovery import router as discovery_router
 from .api.plan import router as plan_router
 from .api.trial import router as trial_router
 
@@ -72,4 +73,5 @@ async def health() -> dict[str, str]:
 # ---------- Routers (more specific paths first) ----------
 app.include_router(trial_router)
 app.include_router(plan_router)
+app.include_router(discovery_router)
 app.include_router(cases_router)

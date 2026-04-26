@@ -2,13 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Case } from "@/lib/api";
-import { API_BASE, ApiError, generatePlan } from "@/lib/api";
+import {
+  API_BASE,
+  ApiError,
+  generatePlan,
+  runDiscovery,
+} from "@/lib/api";
 import {
   AgentTurn,
+  DiscoveryState,
   ExperimentPlan,
   PHASE_BAR,
   PHASE_LABEL,
   PlanState,
+  StareDecisisResult,
   StreamVerdict,
   TrialStreamState,
   TurnPhase,
@@ -16,6 +23,7 @@ import {
   phaseToChipKey,
 } from "@/lib/types";
 import ExperimentPlanCard from "./ExperimentPlanCard";
+import PretrialDiscoveryPanel from "./PretrialDiscoveryPanel";
 import RobeColumn from "./RobeColumn";
 
 function outcomeLabel(o: VerdictOutcome): string {
@@ -45,9 +53,14 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
   const [planState, setPlanState] = useState<PlanState>("idle");
   const [planError, setPlanError] = useState<string | null>(null);
 
+  const [discovery, setDiscovery] = useState<StareDecisisResult | null>(null);
+  const [discoveryState, setDiscoveryState] = useState<DiscoveryState>("idle");
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+
   const esRef = useRef<EventSource | null>(null);
   const streamDoneRef = useRef(false);
   const planRunIdRef = useRef(0); // guards stale plan responses
+  const discoveryRunIdRef = useRef(0); // guards stale discovery responses
 
   const prosecutorTurns = useMemo(
     () => turns.filter((t) => t.role === "prosecutor"),
@@ -75,6 +88,37 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
       esRef.current = null;
     };
   }, []);
+
+  const fireDiscovery = useCallback(
+    async (opts?: { force?: boolean }) => {
+      const runId = ++discoveryRunIdRef.current;
+      setDiscoveryState("running");
+      setDiscoveryError(null);
+      try {
+        const res = await runDiscovery(filed.id, opts);
+        if (discoveryRunIdRef.current !== runId) return;
+        setDiscovery(res);
+        setDiscoveryState("ready");
+      } catch (e) {
+        if (discoveryRunIdRef.current !== runId) return;
+        const msg =
+          e instanceof ApiError
+            ? `Discovery failed (${e.status}): ${e.detail}`
+            : e instanceof Error
+              ? e.message
+              : "Discovery failed.";
+        setDiscoveryError(msg);
+        setDiscoveryState("error");
+      }
+    },
+    [filed.id],
+  );
+
+  // Auto-run pretrial discovery on case mount. The backend caches, so a
+  // page refresh just re-displays the same precedent at zero cost.
+  useEffect(() => {
+    void fireDiscovery();
+  }, [fireDiscovery]);
 
   const runPlanGeneration = useCallback(
     async (opts?: { force?: boolean }) => {
@@ -300,12 +344,61 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
         )}
       </section>
 
+      {/* ---------- Pretrial Discovery ---------- */}
+      {discoveryState === "running" && !discovery && (
+        <section className="rounded-xl border border-court-border bg-court-surface/60 px-5 py-5">
+          <p className="text-[10px] uppercase tracking-[0.28em] text-court-muted mb-1">
+            Pretrial Discovery
+          </p>
+          <p className="font-display text-base text-court-fg">
+            The clerk is searching the published record…
+          </p>
+          <p className="mt-1 text-[12px] text-court-muted">
+            Querying open literature for precedent on the docketed hypothesis.
+          </p>
+          <div className="mt-3 flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-judge animate-pulse" />
+            <span
+              className="w-2 h-2 rounded-full bg-judge animate-pulse"
+              style={{ animationDelay: "0.15s" }}
+            />
+            <span
+              className="w-2 h-2 rounded-full bg-judge animate-pulse"
+              style={{ animationDelay: "0.3s" }}
+            />
+          </div>
+        </section>
+      )}
+      {discoveryState === "error" && discoveryError && !discovery && (
+        <section className="rounded-xl border border-prosecutor/40 bg-prosecutor/10 px-5 py-3">
+          <p className="text-[11px] uppercase tracking-[0.22em] text-prosecutor mb-1">
+            Pretrial Discovery failed
+          </p>
+          <p className="text-sm text-court-fg">{discoveryError}</p>
+          <button
+            type="button"
+            onClick={() => void fireDiscovery({ force: true })}
+            className="mt-2 text-[10px] uppercase tracking-[0.22em] px-3 py-1 rounded-full border border-prosecutor/40 text-prosecutor hover:bg-prosecutor/20 transition-colors"
+          >
+            Try again
+          </button>
+        </section>
+      )}
+      {discovery && (
+        <PretrialDiscoveryPanel
+          result={discovery}
+          onRefresh={() => void fireDiscovery({ force: true })}
+          refreshing={discoveryState === "running"}
+        />
+      )}
+
       {/* ---------- 3-pane courtroom ---------- */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <RobeColumn
           robe="prosecutor"
           turns={prosecutorTurns}
           thinking={thinkingRole === "prosecutor"}
+          discoveryPool={discovery?.citations}
         />
         <RobeColumn
           robe="judge"
@@ -313,11 +406,13 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
           thinking={thinkingRole === "judge"}
           confidence={judgeConfidence}
           elevated
+          discoveryPool={discovery?.citations}
         />
         <RobeColumn
           robe="defender"
           turns={defenderTurns}
           thinking={thinkingRole === "defender"}
+          discoveryPool={discovery?.citations}
         />
       </div>
 

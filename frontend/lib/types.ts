@@ -179,6 +179,31 @@ export type ExperimentPlan = {
 
 export type PlanState = "idle" | "generating" | "ready" | "error";
 
+// --- Pretrial Discovery (mirrors backend StareDecisisResult) ---------------
+
+export type StareDecisisResult = {
+  signal: NoveltySignal;
+  rationale: string;
+  citations: Citation[];
+};
+
+export type DiscoveryState = "idle" | "running" | "ready" | "error";
+
+/** Human label + tone for the novelty badge. */
+export const NOVELTY_LABEL: Record<NoveltySignal, string> = {
+  [NoveltySignal.NOT_FOUND]: "Novel",
+  [NoveltySignal.SIMILAR]: "Adjacent precedent",
+  [NoveltySignal.EXACT_MATCH]: "Near-exact match",
+};
+
+/** Tailwind class set for the novelty badge — green/gold/red mapping. */
+export const NOVELTY_CLASS: Record<NoveltySignal, string> = {
+  [NoveltySignal.NOT_FOUND]: "text-defender border-defender/40 bg-defender/10",
+  [NoveltySignal.SIMILAR]: "text-judge border-judge/40 bg-judge/10",
+  [NoveltySignal.EXACT_MATCH]:
+    "text-prosecutor border-prosecutor/40 bg-prosecutor/10",
+};
+
 // --- Trial-state derivations used by the UI --------------------------------
 
 /** Human-readable phase label shown in the phase bar. */

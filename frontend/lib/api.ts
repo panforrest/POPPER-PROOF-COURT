@@ -79,7 +79,7 @@ export const listCases = (): Promise<Case[]> =>
 
 // --- ExperimentPlan endpoints ----------------------------------------------
 
-import type { ExperimentPlan } from "./types";
+import type { ExperimentPlan, StareDecisisResult } from "./types";
 
 /** Generate (or return cached) ExperimentPlan for a case whose trial completed. */
 export const generatePlan = (
@@ -96,3 +96,23 @@ export const generatePlan = (
 /** Fetch the cached plan for a case (404 if not generated yet). */
 export const fetchPlan = (caseId: string): Promise<ExperimentPlan> =>
   request<ExperimentPlan>(`/api/cases/${encodeURIComponent(caseId)}/plan`);
+
+// --- Pretrial Discovery endpoints ------------------------------------------
+
+/** Run (or return cached) pretrial discovery for the case. */
+export const runDiscovery = (
+  caseId: string,
+  opts?: { force?: boolean },
+): Promise<StareDecisisResult> => {
+  const qs = opts?.force ? "?force=true" : "";
+  return request<StareDecisisResult>(
+    `/api/cases/${encodeURIComponent(caseId)}/discover${qs}`,
+    { method: "POST" },
+  );
+};
+
+/** Fetch cached discovery for a case (404 if none yet). */
+export const fetchDiscovery = (caseId: string): Promise<StareDecisisResult> =>
+  request<StareDecisisResult>(
+    `/api/cases/${encodeURIComponent(caseId)}/discover`,
+  );

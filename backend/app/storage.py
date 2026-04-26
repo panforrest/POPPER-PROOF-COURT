@@ -15,6 +15,7 @@ from .schemas import (
     Case,
     CaseCreate,
     ExperimentPlan,
+    StareDecisisResult,
     Verdict,
 )
 
@@ -97,11 +98,25 @@ def get_plan(case_id: str) -> Optional[ExperimentPlan]:
     return _PLANS.get(case_id)
 
 
+# ---------- Pretrial Discovery cache ----------
+
+_DISCOVERY: dict[str, StareDecisisResult] = {}
+
+
+def set_discovery(case_id: str, result: StareDecisisResult) -> None:
+    _DISCOVERY[case_id] = result
+
+
+def get_discovery(case_id: str) -> Optional[StareDecisisResult]:
+    return _DISCOVERY.get(case_id)
+
+
 # ---------- Test helpers ----------
 
 
 def clear() -> None:
-    """Test helper — wipe all case/trial/plan state."""
+    """Test helper — wipe all case/trial/plan/discovery state."""
     _CASES.clear()
     _TRIAL_RESULTS.clear()
     _PLANS.clear()
+    _DISCOVERY.clear()

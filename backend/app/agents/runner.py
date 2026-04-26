@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from sse_starlette.event import ServerSentEvent
 
 from .. import storage
-from ..schemas import AgentRole, AgentTurn, TurnPhase, VerdictOutcome
+from ..schemas import AgentRole, AgentTurn, Citation, TurnPhase, VerdictOutcome
 from ..trial_stream import build_mock_turns
 from . import clients as c
 from .prompts import (
@@ -26,6 +26,11 @@ from .prompts import (
     PROSECUTOR_SYSTEM,
     build_user_prompt,
 )
+
+# How many top discovery citations to feed the agents per turn. We keep this
+# tight so the prompt stays focused; agents can still cite [1]–[N] from this
+# slice. 4 is "enough breadth without bloating context."
+MAX_AGENT_CITATIONS = 4
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,7 @@ PHASE_ORDER: list[tuple[TurnPhase, AgentRole]] = [
 # --- Small helpers ---------------------------------------------------------
 
 _BELIEF_RE = re.compile(r"belief[^0-9]{0,6}(\d{1,3})", re.IGNORECASE)
+_CITATION_REF_RE = re.compile(r"\[(\d{1,2})\]")
 
 
 def _extract_belief(text: str) -> float | None:
@@ -59,6 +65,45 @@ def _extract_belief(text: str) -> float | None:
     except ValueError:
         return None
     return float(max(0, min(100, n)))
+
+
+def _attached_citations(text: str, pool: list[Citation]) -> list[Citation]:
+    """Resolve ``[N]`` markers in *text* against *pool* (1-indexed).
+
+    Returns each cited ``Citation`` exactly once, in order of first
+    appearance. Out-of-range or malformed markers are silently dropped.
+    """
+    if not pool or not text:
+        return []
+    seen: set[int] = set()
+    out: list[Citation] = []
+    for m in _CITATION_REF_RE.finditer(text):
+        try:
+            idx = int(m.group(1)) - 1
+        except ValueError:
+            continue
+        if 0 <= idx < len(pool) and idx not in seen:
+            seen.add(idx)
+            out.append(pool[idx])
+    return out
+
+
+def _load_discovery_pool(case_id: str | None) -> list[Citation]:
+    """Read cached pretrial discovery for a case; return top-N citations.
+
+    No case_id, no cached discovery, or empty citations all return ``[]`` —
+    the prompts will then omit the RECORD ON FILE block entirely.
+    """
+    if case_id is None:
+        return []
+    try:
+        result = storage.get_discovery(case_id)
+    except Exception:  # noqa: BLE001 — cache read must never break the trial
+        logger.exception("failed to read discovery cache for %s", case_id)
+        return []
+    if result is None or not result.citations:
+        return []
+    return list(result.citations[:MAX_AGENT_CITATIONS])
 
 
 def _coerce_outcome(s: str) -> VerdictOutcome:
@@ -123,12 +168,14 @@ async def _produce_turn(
     hypothesis: str,
     prior: list[AgentTurn],
     fallback_turn: AgentTurn,
+    discovery_pool: list[Citation],
 ) -> AgentTurn:
     """Call the right LLM for this phase; on any failure, return fallback_turn."""
     user_prompt = build_user_prompt(
         phase=phase,
         hypothesis=hypothesis,
         prior_turns=_transcript_entries(prior),
+        discovery_citations=discovery_pool,
     )
 
     try:
@@ -147,7 +194,7 @@ async def _produce_turn(
             phase=phase,
             role=role,
             text=text,
-            citations=[],
+            citations=_attached_citations(text, discovery_pool),
             confidence=confidence,
         )
     except Exception:  # noqa: BLE001 — any provider error falls back
@@ -156,13 +203,17 @@ async def _produce_turn(
 
 
 async def _produce_verdict(
-    *, hypothesis: str, prior: list[AgentTurn]
+    *,
+    hypothesis: str,
+    prior: list[AgentTurn],
+    discovery_pool: list[Citation],
 ) -> tuple[AgentTurn, dict]:
     """Returns (verdict_turn, verdict_payload) — both derived from one JSON call."""
     user_prompt = build_user_prompt(
         phase=TurnPhase.JUDGE_VERDICT,
         hypothesis=hypothesis,
         prior_turns=_transcript_entries(prior),
+        discovery_citations=discovery_pool,
     )
     try:
         raw = await c.call_judge_verdict(system=JUDGE_SYSTEM, user=user_prompt)
@@ -175,11 +226,17 @@ async def _produce_verdict(
             or rationale
         )
 
+        # Resolve [N] markers across BOTH narrative and rationale — the judge
+        # often grounds the ruling in the rationale text, not the spoken
+        # narrative.
+        verdict_blob = f"{narrative}\n{rationale}"
+        cited = _attached_citations(verdict_blob, discovery_pool)
+
         turn = AgentTurn(
             phase=TurnPhase.JUDGE_VERDICT,
             role=AgentRole.JUDGE,
             text=narrative,
-            citations=[],
+            citations=cited,
             confidence=confidence,
         )
         payload = {
@@ -222,6 +279,7 @@ async def real_trial_event_stream(
     """
     fallback_turns = build_mock_turns(hypothesis)
     fallback_by_phase: dict[TurnPhase, AgentTurn] = {t.phase: t for t in fallback_turns}
+    discovery_pool = _load_discovery_pool(case_id)
 
     accumulated: list[AgentTurn] = []
     final_verdict_payload: dict | None = None
@@ -232,7 +290,9 @@ async def real_trial_event_stream(
 
             if phase == TurnPhase.JUDGE_VERDICT:
                 turn, verdict_payload = await _produce_verdict(
-                    hypothesis=hypothesis, prior=accumulated
+                    hypothesis=hypothesis,
+                    prior=accumulated,
+                    discovery_pool=discovery_pool,
                 )
                 yield _turn_event(turn)
                 if turn.confidence is not None:
@@ -248,6 +308,7 @@ async def real_trial_event_stream(
                 hypothesis=hypothesis,
                 prior=accumulated,
                 fallback_turn=fallback_by_phase[phase],
+                discovery_pool=discovery_pool,
             )
             accumulated.append(turn)
             yield _turn_event(turn)

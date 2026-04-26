@@ -260,16 +260,16 @@ cd "POPPER-PROOF COURT"
 cp .env.example .env
 # Then edit .env with your real keys
 
-# 3. Frontend
+# 3. Frontend (Next.js 16 + React 19 + Tailwind 4)
 cd frontend
-pnpm install
-pnpm dev   # → http://localhost:3000
+npm install
+npm run dev   # → http://localhost:3000
 
 # 4. Backend (separate terminal)
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000   # → http://localhost:8000
 ```
 
 ---

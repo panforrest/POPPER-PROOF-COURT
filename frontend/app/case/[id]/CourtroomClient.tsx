@@ -1,27 +1,46 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Case } from "@/lib/api";
+import { API_BASE } from "@/lib/api";
 import {
   AgentTurn,
   PHASE_BAR,
   PHASE_LABEL,
+  StreamVerdict,
+  TrialStreamState,
   TurnPhase,
+  VerdictOutcome,
   phaseToChipKey,
 } from "@/lib/types";
 import RobeColumn from "./RobeColumn";
 
+function outcomeLabel(o: VerdictOutcome): string {
+  if (o === VerdictOutcome.PROCEED) return "Proceed";
+  if (o === VerdictOutcome.REVISE) return "Revise";
+  return "Dismiss";
+}
+
+function outcomeClass(o: VerdictOutcome): string {
+  if (o === VerdictOutcome.PROCEED) return "text-defender border-defender/40";
+  if (o === VerdictOutcome.REVISE) return "text-judge border-judge/40";
+  return "text-prosecutor border-prosecutor/40";
+}
+
 export default function CourtroomClient({ filed }: { filed: Case }) {
-  // Local trial state. In Step 8 these are fed by the SSE stream;
-  // for Step 7 they remain empty until "Begin Trial" is wired.
-  const [turns] = useState<AgentTurn[]>([]);
-  const [currentPhase] = useState<TurnPhase | null>(null);
-  const [judgeConfidence] = useState<number | null>(null);
+  const [turns, setTurns] = useState<AgentTurn[]>([]);
+  const [currentPhase, setCurrentPhase] = useState<TurnPhase | null>(null);
+  const [judgeConfidence, setJudgeConfidence] = useState<number | null>(null);
   const [thinkingRole, setThinkingRole] = useState<
     "prosecutor" | "defender" | "judge" | null
   >(null);
   const [briefExpanded, setBriefExpanded] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [streamVerdict, setStreamVerdict] = useState<StreamVerdict | null>(null);
+  const [trialState, setTrialState] = useState<TrialStreamState>("idle");
+
+  const esRef = useRef<EventSource | null>(null);
+  const streamDoneRef = useRef(false);
 
   const prosecutorTurns = useMemo(
     () => turns.filter((t) => t.role === "prosecutor"),
@@ -43,16 +62,104 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
       ? filed.hypothesis.slice(0, 160).trimEnd() + "…"
       : filed.hypothesis;
 
-  const handleBeginTrial = () => {
-    // Step 8 wires this to POST /api/cases/{id}/trial/start + SSE stream.
-    // For now, flash a notice and briefly simulate "thinking" on the
-    // Prosecutor so the UI can be demoed without a real trial engine.
-    setNotice(
-      "The bailiff is preparing the chamber. Live agents arrive in Step 8 — the three robes are wired and ready.",
-    );
-    setThinkingRole("prosecutor");
-    window.setTimeout(() => setThinkingRole(null), 1800);
-  };
+  useEffect(() => {
+    return () => {
+      esRef.current?.close();
+      esRef.current = null;
+    };
+  }, []);
+
+  const handleBeginTrial = useCallback(() => {
+    // Tear down any prior run
+    streamDoneRef.current = false;
+    esRef.current?.close();
+    esRef.current = null;
+
+    setError(null);
+    setStreamVerdict(null);
+    setTurns([]);
+    setCurrentPhase(null);
+    setJudgeConfidence(null);
+    setThinkingRole(null);
+    setTrialState("streaming");
+
+    const url = `${API_BASE}/api/cases/${encodeURIComponent(filed.id)}/trial/stream`;
+    const es = new EventSource(url);
+    esRef.current = es;
+
+    const onThinking = (e: MessageEvent) => {
+      const p = JSON.parse(e.data) as { role: string };
+      if (p.role === "prosecutor" || p.role === "defender" || p.role === "judge")
+        setThinkingRole(p.role);
+    };
+
+    const onTurn = (e: MessageEvent) => {
+      const t = JSON.parse(e.data) as AgentTurn;
+      setThinkingRole(null);
+      setTurns((prev) => [...prev, t]);
+      setCurrentPhase(t.phase);
+      if (t.role === "judge" && t.confidence != null)
+        setJudgeConfidence(t.confidence);
+    };
+
+    const onBelief = (e: MessageEvent) => {
+      const p = JSON.parse(e.data) as { value: number };
+      setJudgeConfidence(p.value);
+    };
+
+    const onVerdict = (e: MessageEvent) => {
+      const v = JSON.parse(e.data) as StreamVerdict;
+      setStreamVerdict(v);
+    };
+
+    const onComplete = () => {
+      if (esRef.current !== es) return;
+      streamDoneRef.current = true;
+      setTrialState("complete");
+      setThinkingRole(null);
+      es.close();
+      if (esRef.current === es) esRef.current = null;
+    };
+
+    const onTrialError = (e: MessageEvent) => {
+      if (esRef.current !== es) return;
+      const p = JSON.parse(e.data) as { message: string };
+      setError(p.message);
+      setTrialState("error");
+      setThinkingRole(null);
+      es.close();
+      if (esRef.current === es) esRef.current = null;
+    };
+
+    es.addEventListener("thinking", onThinking);
+    es.addEventListener("turn", onTurn);
+    es.addEventListener("belief", onBelief);
+    es.addEventListener("verdict", onVerdict);
+    es.addEventListener("complete", onComplete);
+    es.addEventListener("trial_error", onTrialError);
+
+    es.onerror = () => {
+      if (esRef.current !== es) return;
+      if (streamDoneRef.current) return;
+      if (es.readyState === EventSource.CLOSED) {
+        setError(
+          (prev) =>
+            prev ??
+            "The bailiff could not open the stream. Is the backend on :8000, and the case still on the docket?",
+        );
+        setTrialState("error");
+        setThinkingRole(null);
+      }
+    };
+  }, [filed.id]);
+
+  const ctaLabel =
+    trialState === "streaming"
+      ? "Trial in session…"
+      : trialState === "complete" || trialState === "error"
+        ? "Run trial again"
+        : "⚖ Begin Trial";
+  const ctaDisabled = trialState === "streaming";
 
   return (
     <div className="flex flex-col gap-6">
@@ -74,9 +181,10 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
           <button
             type="button"
             onClick={handleBeginTrial}
-            className="px-6 py-3 bg-judge text-court-bg font-semibold uppercase tracking-[0.18em] text-xs rounded-md transition-colors hover:bg-judge/90 shadow-lg shadow-judge/20 shrink-0"
+            disabled={ctaDisabled}
+            className="px-6 py-3 bg-judge text-court-bg font-semibold uppercase tracking-[0.18em] text-xs rounded-md transition-colors enabled:hover:bg-judge/90 shadow-lg shadow-judge/20 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            ⚖ Begin Trial
+            {ctaLabel}
           </button>
         </div>
 
@@ -128,15 +236,22 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
           })}
         </div>
 
-        {notice && (
-          <p className="mt-4 text-sm text-defender bg-defender/10 border border-defender/30 rounded-md px-4 py-3">
-            {notice}
+        {error && (
+          <p className="mt-4 text-sm text-prosecutor bg-prosecutor/10 border border-prosecutor/30 rounded-md px-4 py-3">
+            {error}
           </p>
         )}
 
         {currentPhase && (
           <p className="mt-3 text-[11px] text-court-muted uppercase tracking-[0.22em]">
             Now: {PHASE_LABEL[currentPhase]}
+          </p>
+        )}
+
+        {trialState === "complete" && !error && (
+          <p className="mt-4 text-sm text-defender bg-defender/10 border border-defender/30 rounded-md px-4 py-3">
+            The mock trial is complete. Step 9+ swaps canned lines for true
+            multi-agent arguments with real citations and ElevenLabs voice.
           </p>
         )}
       </section>
@@ -167,18 +282,38 @@ export default function CourtroomClient({ filed }: { filed: Case }) {
         <div className="flex items-center gap-3 mb-2">
           <span className="text-judge text-xl leading-none">⚖</span>
           <h2 className="font-display text-xl text-court-fg">Verdict</h2>
-          <span className="ml-auto text-[10px] text-court-muted uppercase tracking-[0.22em]">
-            Pending
+          <span
+            className={`ml-auto text-[10px] uppercase tracking-[0.22em] px-3 py-1 rounded-full border ${
+              streamVerdict
+                ? outcomeClass(streamVerdict.outcome)
+                : "text-court-muted border-court-border"
+            }`}
+          >
+            {streamVerdict
+              ? outcomeLabel(streamVerdict.outcome)
+              : "Pending"}
           </span>
         </div>
-        <p className="text-sm text-court-muted leading-relaxed">
-          The court has not yet rendered its verdict. Once the trial concludes,
-          the Judge will decide{" "}
-          <span className="text-judge">proceed</span>,{" "}
-          <span className="text-judge">revise</span>, or{" "}
-          <span className="text-judge">dismiss</span>, and the clerk will
-          produce a procurement-ready experiment plan.
-        </p>
+        {streamVerdict ? (
+          <>
+            <p className="text-sm text-court-fg leading-relaxed mb-2">
+              {streamVerdict.rationale}
+            </p>
+            <p className="text-[11px] text-court-muted uppercase tracking-[0.2em]">
+              Judge’s confidence in this outcome: {Math.round(streamVerdict.confidence)}%
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-court-muted leading-relaxed">
+            The court has not yet rendered its verdict. Click{" "}
+            <span className="text-court-fg">Begin Trial</span> to open the mock
+            stream, or wait for a live docket. When the trial ends, the Judge
+            will decide <span className="text-judge">proceed</span>,{" "}
+            <span className="text-judge">revise</span>, or{" "}
+            <span className="text-judge">dismiss</span>, and the clerk can publish
+            a procurement-ready plan.
+          </p>
+        )}
       </section>
     </div>
   );

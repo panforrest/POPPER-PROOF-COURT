@@ -62,6 +62,15 @@ export type AgentTurn = {
   timestamp: string; // ISO 8601
 };
 
+/** End-of-trial payload from the SSE `verdict` event (Step 8 mock, Step N real). */
+export type StreamVerdict = {
+  outcome: VerdictOutcome;
+  rationale: string;
+  confidence: number; // 0..100, judge’s confidence in the outcome
+};
+
+export type TrialStreamState = "idle" | "streaming" | "complete" | "error";
+
 // --- Trial-state derivations used by the UI --------------------------------
 
 /** Human-readable phase label shown in the phase bar. */

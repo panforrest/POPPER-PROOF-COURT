@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.cases import router as cases_router
+from .api.trial import router as trial_router
 
 # Load .env from the repo root (one level above /backend) so a single
 # .env serves both frontend and backend.
@@ -67,5 +68,6 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-# ---------- Routers ----------
+# ---------- Routers (more specific paths first) ----------
+app.include_router(trial_router)
 app.include_router(cases_router)

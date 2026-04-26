@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { SAMPLE_CASES, findSampleCase } from "@/lib/sample-cases";
+import { createCase } from "@/lib/api";
 
 const PLACEHOLDER = `Example:
 Replacing sucrose with trehalose as a cryoprotectant in the freezing medium will increase post-thaw viability of HeLa cells by at least 15 percentage points compared to the standard DMSO protocol, due to trehalose's superior membrane stabilization at low temperatures.
@@ -11,12 +12,13 @@ Replacing sucrose with trehalose as a cryoprotectant in the freezing medium will
 A strong hypothesis names the system, the intervention, the predicted effect with a number, and the proposed mechanism.`;
 
 export default function DraftClient() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const sampleId = searchParams.get("sample");
 
   const [hypothesis, setHypothesis] = useState("");
   const [filing, setFiling] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // If ?sample=<id> is present, pre-fill the textarea once on mount.
   useEffect(() => {
@@ -31,19 +33,25 @@ export default function DraftClient() {
   );
 
   const charCount = hypothesis.length;
-  const isReady = wordCount >= 8;
+  // Backend requires hypothesis.length >= 20 (Pydantic). We also enforce
+  // 8+ words client-side to nudge users toward substantive briefs.
+  const isReady = wordCount >= 8 && charCount >= 20;
 
   const handleFile = async () => {
     if (!isReady) return;
     setFiling(true);
-    setNotice(null);
-    // Backend wiring (POST /api/cases → /case/[id]) lands in Step 6.
-    // For now we simulate the submission so reviewers can feel the button.
-    await new Promise((r) => setTimeout(r, 600));
-    setFiling(false);
-    setNotice(
-      "Brief drafted. Courtroom routing wires up in Step 6 — your hypothesis is held in counsel chambers for now.",
-    );
+    setError(null);
+    try {
+      const filed = await createCase({ hypothesis: hypothesis.trim() });
+      router.push(`/case/${filed.id}`);
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "The clerk refused the filing. Is the backend running on :8000?",
+      );
+      setFiling(false);
+    }
   };
 
   return (
@@ -164,9 +172,9 @@ export default function DraftClient() {
             >
               {filing ? "Filing the case…" : "Send to Court →"}
             </button>
-            {notice && (
-              <p className="text-defender text-sm max-w-md text-center bg-defender/10 border border-defender/30 rounded-md px-4 py-3">
-                {notice}
+            {error && (
+              <p className="text-prosecutor text-sm max-w-md text-center bg-prosecutor/10 border border-prosecutor/30 rounded-md px-4 py-3">
+                {error}
               </p>
             )}
           </div>

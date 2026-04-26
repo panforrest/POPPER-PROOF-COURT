@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .api.cases import router as cases_router
+
 # Load .env from the repo root (one level above /backend) so a single
 # .env serves both frontend and backend.
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
@@ -63,3 +65,7 @@ async def root() -> dict[str, str]:
 async def health() -> dict[str, str]:
     """Liveness probe — used by Step 3 smoke test and Railway/Render."""
     return {"status": "ok"}
+
+
+# ---------- Routers ----------
+app.include_router(cases_router)
